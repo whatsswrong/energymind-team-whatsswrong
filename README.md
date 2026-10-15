@@ -23,7 +23,7 @@ Three mutually independent aggregates are compared — the sum of the
 household meters, the zone meter, and the transformer meter — and
 their disagreement identifies the liar.
 
-## 2. Final architecture
+## 2.  architecture
 
 ```
 raw measurements
