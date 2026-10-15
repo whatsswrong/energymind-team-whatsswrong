@@ -1,0 +1,23 @@
+# caches Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# environnements virtuels
+.venv/
+venv/
+env/
+
+# Artefacts regenerables et volumineux.
+# Le modele entraine se reconstruit avec : python main.py
+# ANCRE A LA RACINE : sans la barre initiale, le motif ignorerait aussi
+# src/models/, c'est-a-dire le code source des modeles.
+/models/
+# Le cache de calibration se reconstruit avec : python run_calibration.py
+outputs/datasets/*.npz
+outputs/datasets/features.csv
+
+# editeurs
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,12 @@
+,falsified_reading,house_outage,missing_data,normal,overload,sensor_bias,sensor_drift,sensor_frozen,voltage_sag,voltage_spike,zone_outage
+falsified_reading,73,0,0,14,0,14,0,1,0,0,0
+house_outage,0,191,0,0,0,0,0,0,0,0,0
+missing_data,0,0,78,6,0,0,0,0,0,0,0
+normal,2,0,1,69794,36,284,161,8,0,0,0
+overload,0,0,0,51,2308,0,1,0,0,0,0
+sensor_bias,0,0,0,342,1,213,210,0,14,10,0
+sensor_drift,0,0,0,996,0,143,166,0,35,21,0
+sensor_frozen,2,0,0,23,0,1,0,475,0,0,0
+voltage_sag,0,0,0,0,0,0,0,0,430,0,0
+voltage_spike,0,0,0,1,0,0,0,0,0,324,0
+zone_outage,0,0,0,0,0,0,0,0,0,0,370

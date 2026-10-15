@@ -1,0 +1,13 @@
+# Dependances du pipeline final EnergyMind Phase 1.
+numpy>=1.24
+pandas>=2.0
+PyYAML>=6.0
+scipy>=1.10          # optimisation des calibrateurs (temperature, vecteur)
+scikit-learn==1.5.2  # epingle : 1.9.x est bloque par la strategie de controle
+                     # d'applications de Windows (DLL _expected_mutual_info_fast)
+lightgbm>=4.0
+matplotlib>=3.7
+joblib>=1.3
+
+# tests
+pytest>=7.4

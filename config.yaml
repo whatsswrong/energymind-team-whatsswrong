@@ -1,0 +1,90 @@
+# ============================================================================
+# EnergyMind Phase 1 - Comparaison d'architectures ML
+# Tous les parametres de l'experience sont centralises ici.
+# ============================================================================
+
+paths:
+  data_dir: data
+  outputs_dir: outputs
+  models_dir: models
+
+# Constantes physiques : RECOPIEES depuis le simulateur, pas inventees.
+# Source : data/simulator_config_reference.yaml
+#   voltage.nominal_v            -> nominal_voltage_v
+#   grid.transformer_capacity_kw -> transformer_capacity_kw
+#   simulation.interval_minutes  -> interval_minutes
+grid:
+  nominal_voltage_v: 230.0
+  transformer_capacity_kw: 100.0
+  interval_minutes: 15
+  houses_per_zone: 5
+
+features:
+  rolling_std_window: 24        # 24 pas x 15 min = 6 h
+  drift_window: 48              # 48 pas = 12 h
+  drift_min_periods: 24
+  rolling_min_periods: 4
+  eps_power_kw: 0.05            # protege les divisions pres de zero
+  eps_ratio: 0.05
+  baseline_min_samples: 2       # sinon repli sur la mediane globale de la maison
+  frozen_tol_quantile: 0.02     # quantile des variations relatives (train normal)
+  frozen_tol_floor: 0.002       # plancher : jitter du simulateur ~0,05-0,2 %
+  neighbor_z_quantile: 0.99     # seuil "voisin anormal" (train normal)
+
+# Decoupage temporel sur les 240 jours du dataset. Le split principal reprend
+# celui du simulateur ; les quatre splits glissants servent a mesurer la
+# stabilite du resultat. Proportions : 2/3 train, 1/6 validation, 1/6 test.
+splits:
+  primary:
+    name: PRIMARY
+    train: [1, 160]
+    validation: [161, 200]
+    test: [201, 240]
+  rolling:
+    - {name: S1, train: [1, 120], validation: [121, 140], test: [141, 180]}
+    - {name: S2, train: [1, 140], validation: [141, 160], test: [161, 200]}
+    - {name: S3, train: [1, 160], validation: [161, 180], test: [181, 220]}
+    - {name: S4, train: [1, 180], validation: [181, 200], test: [201, 240]}
+
+model:
+  random_state: 42
+  lightgbm:
+    n_estimators: 400
+    learning_rate: 0.06
+    num_leaves: 63
+    min_child_samples: 30
+    subsample: 0.9
+    subsample_freq: 1
+    colsample_bytree: 0.9
+    reg_lambda: 1.0
+    n_jobs: -1
+    verbose: -1
+  isolation_forest:
+    n_estimators: 300
+    max_samples: 0.5
+    n_jobs: -1
+    # taux de faux positifs vise sur les donnees NORMALES d'entrainement :
+    # le seuil de score est le quantile correspondant, ajuste sur train seul
+    target_train_fpr: 0.02
+
+# Fusion modele + regles. Les deux seuils sont choisis par recherche sur la
+# VALIDATION uniquement (jamais sur le test).
+fusion:
+  promote_min_prob_grid: [0.05, 0.10, 0.15, 0.25, 0.35]
+  demote_max_prob_grid: [0.40, 0.55, 0.70, 0.85, 1.01]
+
+# Politique de confiance appliquee en exploitation. Valeurs validees : ne pas
+# modifier sans refaire la campagne de calibration.
+inference:
+  calibration_method: vector      # Vector Scaling, ajuste sur la validation
+  confidence_threshold: 0.80      # en dessous : statut INCERTAIN
+  emit_unknown: false             # promotion -> nom de classe (comportement
+                                  # valide) ; true -> UNKNOWN_ANOMALY
+
+rules:
+  threshold_quantile: 0.995     # quantile des residus sur le train NORMAL
+  min_coherent_neighbors: 2     # CASE 2 : evenement reseau si >= 2 maisons bougent
+
+# Experience "anomalie inconnue" : classes retirees une a une de
+# l'entrainement LightGBM (jamais relabellisees).
+

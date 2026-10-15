@@ -1,0 +1,256 @@
+# ============================================================================
+# EnergyMind - Simulateur de donnees (independant de la plateforme et du ML)
+# Tous les parametres de la simulation sont centralises ici.
+# ============================================================================
+
+simulation:
+  days: 240
+  interval_minutes: 15
+  start_timestamp: "2025-01-01 00:00:00"
+  random_seed: 42
+  output_dir: "output"
+
+grid:
+  houses: 20
+  zones: 4
+  houses_per_zone: 5
+  transformer_capacity_kw: 100.0  # capacite nominale (sert a trans_load_pct)
+
+# ---------------------------------------------------------------------------
+# Reference de tension : une seule source de verite pour le nominal, la plage
+# normale et l'amplitude des creux / surtensions injectes.
+# ---------------------------------------------------------------------------
+voltage:
+  nominal_v: 230.0
+  normal_tolerance_pct: 0.06      # +/- 6 % : plage consideree comme normale
+  sag_min_pct: 0.08               # creux : 8 % a 22 % sous le nominal
+  sag_max_pct: 0.22
+  spike_min_pct: 0.06             # surtension : 6 % a 16 % au-dessus
+  spike_max_pct: 0.16
+
+# ---------------------------------------------------------------------------
+# Profils de consommation des maisons (comportement normal)
+# Les bornes definissent la plage de tirage aleatoire : chaque maison recoit
+# ses propres parametres, donc les 20 profils sont differents.
+# ---------------------------------------------------------------------------
+houses:
+  night_base_kw: [0.08, 0.35]        # plancher de nuit (veille, frigo, box)
+  day_level_kw: [0.15, 0.70]         # plateau de journee
+  morning_peak_kw: [0.40, 1.60]      # amplitude du pic du matin
+  morning_peak_hour: [6.0, 8.5]      # heure du pic du matin
+  morning_peak_width_h: [0.7, 1.6]   # largeur (ecart-type gaussien, heures)
+  evening_peak_kw: [1.00, 3.20]      # amplitude du pic du soir (plus marque)
+  evening_peak_hour: [18.0, 21.5]    # heure du pic du soir
+  evening_peak_width_h: [1.0, 2.2]   # largeur du pic du soir
+  weekend_factor: [0.85, 1.30]       # modulation week-end propre a la maison
+  weekday_spread: 0.08               # +/- variation aleatoire par jour de semaine
+  seasonal_amplitude: [0.03, 0.12]   # lente derive saisonniere (fraction)
+  noise_ar_rho: 0.85                 # autocorrelation du bruit multiplicatif
+  noise_sigma: [0.04, 0.10]          # ecart-type du bruit multiplicatif
+  min_power_kw: 0.03                 # plancher physique (jamais negatif)
+  max_power_kw: 9.00                 # limite du disjoncteur domestique
+  power_factor_mean: [0.90, 0.975]   # PF moyen par maison
+  power_factor_noise: 0.012          # bruit sur le PF
+  power_factor_bounds: [0.80, 0.99]  # bornes physiques du PF
+  pf_load_sensitivity: 0.025         # le PF s'ameliore legerement en charge
+  energy_start_kwh: [800.0, 6000.0]  # index de depart du compteur
+  appliance_bursts:
+    enabled: true
+    prob_per_step: 0.004             # probabilite d'un demarrage d'appareil
+    amplitude_kw: [0.6, 2.2]
+    duration_steps: [1, 4]
+
+# ---------------------------------------------------------------------------
+# Modele electrique (chute de tension en fonction de la charge)
+# ---------------------------------------------------------------------------
+electrical:
+  zone_voltage_drop_per_kw: 0.22     # V perdus par kW de charge de zone
+  house_voltage_drop_per_kw: 0.55    # chute supplementaire dans le branchement
+  zone_voltage_offset_v: [-2.5, 2.5] # decalage fixe propre a chaque zone
+  zone_voltage_slow_sigma: 0.0035    # derive lente du reseau amont (fraction)
+  house_voltage_noise_v: 0.35        # bruit physique local
+  load_voltage_exponent: 1.4         # dependance P(V) lors d'un creux/pic
+
+# ---------------------------------------------------------------------------
+# Pertes techniques du reseau (echauffement des conducteurs, transformateur).
+# Un vrai reseau ne verifie jamais "somme des maisons == zone_P" exactement :
+#   zone_P  = somme des P maisons x (1 + perte_zone)
+#   trans_P = somme des zone_P    x (1 + perte_transfo)
+# La perte relative croit avec la charge (pertes Joule) et derive lentement.
+# ---------------------------------------------------------------------------
+losses:
+  zone:
+    base_pct: [0.008, 0.016]         # perte a vide, propre a chaque zone
+    load_coeff_pct: 0.014            # supplement a la charge de reference
+    reference_load_kw: 20.0
+    slow_sigma: 0.0015               # derive lente (fraction de la perte)
+  transformer:
+    base_pct: 0.007
+    load_coeff_pct: 0.011
+    reference_load_kw: 80.0
+    slow_sigma: 0.0010
+
+# ---------------------------------------------------------------------------
+# Bruit de mesure des capteurs (fonctionnement normal : mesure ~= realite)
+# ---------------------------------------------------------------------------
+sensors:
+  house_voltage_rel_noise: 0.0025
+  house_current_rel_noise: 0.005
+  house_power_rel_noise: 0.005
+  house_pf_abs_noise: 0.004
+  energy_resolution_kwh: 0.01        # quantification de l'index d'energie
+  zone_power_rel_noise: 0.004
+  zone_voltage_rel_noise: 0.0025
+  transformer_power_rel_noise: 0.003
+  decimals:                          # arrondi final des fichiers RAW
+    V: 2
+    I: 3
+    P: 4
+    PF: 4
+    E: 2
+    zone_P: 4
+    zone_V: 2
+    trans_P: 4
+
+# ---------------------------------------------------------------------------
+# Injection d'anomalies
+#   data_quality : n'altere QUE la mesure (maison, zone ou transformateur)
+#   grid_events  : altere REELLEMENT la physique, vue de facon coherente a tous
+#                  les niveaux apres re-resolution du reseau
+#
+# La planification est pilotee par le NOMBRE d'evenements independants par
+# classe (et non par un budget de lignes) : un evenement de 100 lignes n'est
+# pas equivalent a 100 evenements pour l'apprentissage.
+# ---------------------------------------------------------------------------
+anomalies:
+  # --- decoupage temporel utilise plus tard par le ML -------------------
+  # Le scheduler planifie un quota d'evenements PAR CLASSE ET PAR SPLIT, au
+  # lieu de tirer sur 60 jours en esperant une bonne repartition. Un evenement
+  # est toujours place entierement dans un seul split (jamais a cheval).
+  splits:                            # bornes en jours, incluses
+    train: [1, 160]
+    validation: [161, 200]
+    test: [201, 240]
+  events_per_split:                  # quota vise par classe, pour chaque split
+    train: 56                        # 14 x 4 : meme densite qu'en 60 jours
+    validation: 16
+    test: 16
+  events_per_split_overrides:        # classes a forte emprise : au minimum requis
+    overload: {train: 40, validation: 12, test: 12}
+    zone_outage: {train: 40, validation: 12, test: 12}
+    transformer_sensor_bias: {train: 40, validation: 12, test: 12}
+    transformer_sensor_drift: {train: 40, validation: 12, test: 12}
+    transformer_sensor_frozen: {train: 40, validation: 12, test: 12}
+  min_events_per_split:              # plancher exige : sinon avertissement
+    train: 40
+    validation: 12
+    test: 12
+  max_anomaly_rate: 0.10             # garde-fou : avertissement au-dela
+  house_balance_warn_ratio: 2.2      # alerte si une maison depasse ce multiple
+  min_gap_steps: 4                   # ecart minimal entre deux evenements
+  severity_levels: ["low", "medium", "high"]
+  severity_weights: [0.4, 0.4, 0.2]
+
+  # --- problemes de qualite de donnee ------------------------------------
+  # Les modes de defaillance sont volontairement multi-canaux : un compteur
+  # dont la chaine de courant derive fausse I *et* P sans casser P=V*I*PF, et
+  # son index d'energie suit la puissance fausse. res_VI et res_energy restent
+  # informatifs mais ne donnent plus automatiquement la reponse.
+  data_quality:
+    sensor_frozen:
+      duration_steps: [8, 48]        # 2 h a 12 h
+      # jitter toujours non nul : frozen_count devra utiliser une tolerance
+      jitter_rel: {low: 0.0020, medium: 0.0010, high: 0.0005}
+      mode_weights: {full_frame: 0.6, measurement_only: 0.4}
+    sensor_bias:
+      duration_steps: [24, 72]       # 6 h a 18 h
+      # biais RELATIF, proportionnel a la grandeur mesuree
+      bias_pct_range: [0.04, 0.30]
+      sign_prob_positive: 0.45
+      mode_weights: {current_chain: 0.35, voltage_chain: 0.25,
+                     power_only: 0.25, energy_register: 0.15}
+    sensor_drift:
+      duration_steps: [48, 128]      # 12 h a 32 h : assez long pour drift_slope
+      final_pct_range: [0.05, 0.35]
+      ramp_exponent: [1.4, 2.4]      # > 1 : demarre tres doucement
+      sign_prob_positive: 0.6
+      mode_weights: {current_chain: 0.35, voltage_chain: 0.25,
+                     power_only: 0.25, energy_register: 0.15}
+    missing_data:
+      duration_steps: [1, 12]
+      channels: ["V", "I", "P", "PF", "E"]
+      pattern_weights: {single_channel: 0.3, multi_channel: 0.25,
+                        full_packet: 0.3, comms_outage: 0.15}
+      comms_outage_steps: [8, 24]    # coupure de communication plus longue
+    falsified_reading:
+      duration_steps: [2, 10]
+      under_report_pct: [0.25, 0.70] # fraction retiree a la mesure
+      inflate_prob: 0.25
+      inflate_pct: [0.6, 2.5]        # fraction ajoutee
+      mode_weights: {tampered_ct: 0.5, power_only: 0.5}
+
+    # --- capteurs de zone : le reseau est sain, le compteur de zone ment ---
+    zone_sensor_bias:
+      duration_steps: [16, 64]
+      bias_pct_range: [0.03, 0.18]
+      sign_prob_positive: 0.45
+      channel_weights: {zone_P: 0.7, zone_V: 0.3}
+    zone_sensor_drift:
+      duration_steps: [32, 96]
+      final_pct_range: [0.04, 0.22]
+      ramp_exponent: [1.4, 2.4]
+      sign_prob_positive: 0.6
+      channel_weights: {zone_P: 0.7, zone_V: 0.3}
+    zone_sensor_frozen:
+      duration_steps: [8, 32]
+      jitter_rel: {low: 0.0020, medium: 0.0010, high: 0.0005}
+
+    # --- capteur du transformateur ----------------------------------------
+    transformer_sensor_bias:
+      duration_steps: [6, 24]
+      bias_pct_range: [0.03, 0.15]
+      sign_prob_positive: 0.45
+    transformer_sensor_drift:
+      duration_steps: [12, 40]
+      final_pct_range: [0.04, 0.20]
+      ramp_exponent: [1.4, 2.4]
+      sign_prob_positive: 0.6
+    transformer_sensor_frozen:
+      duration_steps: [4, 12]
+      jitter_rel: {low: 0.0020, medium: 0.0010, high: 0.0005}
+
+  # --- evenements reseau reels -------------------------------------------
+  grid_events:
+    house_outage:
+      duration_steps: [2, 20]        # 30 min a 5 h
+      voltage_to_zero: true
+    zone_outage:
+      duration_steps: [2, 12]
+      voltage_to_zero: true
+    voltage_sag:
+      duration_steps: [2, 8]         # toujours plusieurs pas de temps
+    voltage_spike:
+      duration_steps: [2, 6]
+    overload:
+      duration_steps: [6, 18]
+      # charge visee au sommet, en fraction de la capacite nominale
+      target_load_ratio: {low: 1.04, medium: 1.16, high: 1.32}
+      max_demand_factor: 6.0         # garde-fou sur l'amplification
+      zones_affected: [3, 4]         # nombre de zones qui montent en charge
+      prefer_peak_hours: [16, 22]    # fenetre horaire privilegiee
+      # montee et descente progressives : fraction de la fenetre consacree aux
+      # rampes. Le reste suit les variations naturelles de la demande, donc
+      # aucun plateau artificiel.
+      ramp_fraction: [0.25, 0.40]
+
+# ---------------------------------------------------------------------------
+# Tolerances des verifications automatiques
+# ---------------------------------------------------------------------------
+validation:
+  pf_bounds: [0.75, 1.0]
+  voltage_sane_bounds: [180.0, 265.0]
+  power_sane_bounds: [0.0, 12.0]
+  vi_relative_tolerance: 0.05        # coherence P ~ V*I*PF/1000
+  zone_loss_bounds: [0.004, 0.060]   # (zone_P / somme maisons) - 1
+  trans_loss_bounds: [0.003, 0.045]  # (trans_P / somme zones) - 1
+  min_events_per_class: 8            # plancher accepte par classe

@@ -1,0 +1,5 @@
+file,rows,columns,ts_min,ts_max,ts_unique,step_minutes,duplicate_keys,missing_cells,missing_columns
+raw_houses,460800,8,2025-01-01,2025-08-28 23:45:00,23040,15,0,2161,"V=409, I=424, P=465, PF=436, E=427"
+raw_zones,92160,4,2025-01-01,2025-08-28 23:45:00,23040,15,0,0,-
+raw_transformer,23040,2,2025-01-01,2025-08-28 23:45:00,23040,15,0,0,-
+labels,576000,11,2025-01-01,2025-08-28 23:45:00,23040,15,0,659184,"zone_id=23040, house_id=115200, event_id=520944"

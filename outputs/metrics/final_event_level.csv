@@ -1,0 +1,11 @@
+label,event_recall,event_class_recall,n_events,median_latency_steps
+falsified_reading,0.875,0.8125,16,0.0
+house_outage,1.0,1.0,16,0.0
+missing_data,0.9375,0.9375,16,0.0
+overload,1.0,1.0,12,0.0
+sensor_bias,1.0,0.6875,16,0.5
+sensor_drift,0.9375,0.9375,16,28.0
+sensor_frozen,1.0,1.0,16,0.0
+voltage_sag,1.0,1.0,16,0.0
+voltage_spike,1.0,1.0,16,0.0
+zone_outage,1.0,1.0,12,0.0
