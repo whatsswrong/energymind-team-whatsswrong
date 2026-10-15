@@ -1,42 +1,40 @@
 # EnergyMind Phase 1
 
-Détection et classification d'anomalies sur un micro-réseau électrique
-intelligent : 20 maisons, 4 zones, 1 transformateur, mesures toutes les
-15 minutes sur 240 jours.
+Anomaly detection and classification on a smart electrical micro-grid:
+20 houses, 4 zones, 1 transformer, measurements every 15 minutes over 240 days.
 
-## 1. Vue d'ensemble
+## 1. Overview
 
-Le système reçoit les relevés de compteurs et produit, pour chaque maison et
-chaque pas de temps, un verdict parmi onze classes — fonctionnement normal ou
-l'une des dix anomalies — accompagné d'une confiance calibrée.
+The system receives meter readings and produces, for each house and each time
+step, a verdict among eleven classes (normal operation or one of the ten
+anomalies) together with a calibrated confidence.
 
-Trois composants aux rôles étanches :
+Three components with strictly separated roles:
 
-| Composant | Rôle | Ce qu'il ne fait pas |
+| Component | Role | What it does not do |
 |---|---|---|
-| **LightGBM** | classe les anomalies connues | — |
-| **Isolation Forest** | score d'atypicité / nouveauté | il ne classe rien, n'invente aucun nom de classe |
-| **Règles physiques** | cohérence maison ↔ voisins ↔ zone ↔ transformateur | il n'apprend rien |
+| *LightGBM* | classifies known anomalies | — |
+| *Isolation Forest* | atypicality / novelty score | it classifies nothing and invents no class name |
+| *Physical rules* | consistency between house ↔ neighbors ↔ zone ↔ transformer | it learns nothing |
 
-Principe directeur du moteur de règles : **aucun capteur n'est une vérité
-absolue**. On compare trois agrégats mutuellement indépendants — la somme des
-compteurs de maison, le compteur de zone, le compteur du transformateur — et
-c'est leur désaccord qui désigne le menteur.
+Guiding principle of the rule engine: *no sensor is an absolute truth*. Three
+mutually independent aggregates are compared (the sum of the house meters, the
+zone meter, and the transformer meter), and it is their disagreement that
+points to the liar.
 
-## 2. Architecture finale
+## 2. Final architecture
 
-```
-mesures brutes
+raw measurements
       │
       ▼
-assemblage maison + zone + transformateur
+house + zone + transformer assembly
       │
       ▼
    24 features
       │
       ├──────────────┬────────────────────┐
       ▼              ▼                    ▼
-  LightGBM     Isolation Forest     règles physiques
+  LightGBM     Isolation Forest     physical rules
       │              │                    │
       ▼              │                    │
  Vector Scaling      │                    │
@@ -46,258 +44,241 @@ assemblage maison + zone + transformateur
                    fusion
                      │
                      ▼
-        verdict + confiance calibrée
+        verdict + calibrated confidence
                      │
-          confiance ≥ 0,80 ?  ──non──▶  INCERTAIN
-                     │ oui
+          confidence ≥ 0.80 ?  ──no──▶  UNCERTAIN
+                     │ yes
                      ▼
-              diagnostic de classe
-```
+               class diagnosis
 
-**Logique de fusion**, volontairement simple et documentée :
+*Fusion logic*, deliberately simple and documented:
 
-- LightGBM dit « normal » mais les preuves signalent une anomalie, et sa
-  meilleure classe anormale dépasse `promote_min_prob` → promotion ;
-- LightGBM dit « anormal » sans preuve et avec une confiance inférieure à
-  `demote_max_prob` → retour à « normal ».
+- LightGBM says "normal" but the evidence signals an anomaly, and its best
+  abnormal class exceeds promote_min_prob → promotion;
+- LightGBM says "abnormal" without evidence and with a confidence below
+  demote_max_prob → back to "normal".
 
-Les deux seuils sont choisis par recherche exhaustive **sur la validation
-uniquement**.
+Both thresholds are chosen by exhaustive search *on the validation set only*.
 
 ## 3. Dataset
 
-Jeu figé de 240 jours produit par le simulateur EnergyMind (projet séparé).
+Frozen 240-day dataset produced by the EnergyMind simulator (separate project).
 
-| Fichier | Lignes | Contenu |
+| File | Rows | Content |
 |---|---|---|
-| `data/raw_houses.csv` | 460 800 | `timestamp, house_id, zone_id, V, I, P, PF, E` |
-| `data/raw_zones.csv` | 92 160 | `timestamp, zone_id, zone_P, zone_V` |
-| `data/raw_transformer.csv` | 23 040 | `timestamp, trans_P` |
-| `data/labels.csv` | 576 000 | cible supervisée, trois niveaux d'entités |
+| data/raw_houses.csv | 460,800 | timestamp, house_id, zone_id, V, I, P, PF, E |
+| data/raw_zones.csv | 92,160 | timestamp, zone_id, zone_P, zone_V |
+| data/raw_transformer.csv | 23,040 | timestamp, trans_P |
+| data/labels.csv | 576,000 | supervised target, three entity levels |
 
-`ground_truth.csv` et `injection_log.csv` ne sont **jamais lus**. Le chargeur
-refuse tout fichier dont le schéma comporte une colonne inattendue, ce qui
-bloquerait une fuite de vérité de simulation.
+ground_truth.csv and injection_log.csv are *never read*. The loader
+rejects any file whose schema contains an unexpected column, which would block
+any leakage of simulation truth.
 
-`labels.csv` fournit `label` (la cible) et `event_id`. **`event_id` sert
-exclusivement** à construire les découpages sans fuite et à l'évaluation au
-niveau événement ; il n'entre jamais dans la matrice de features.
+labels.csv provides label (the target) and event_id. **event_id is used
+exclusively** to build leak-free splits and for event-level evaluation; it
+never enters the feature matrix.
 
-### Découpages temporels
+### Temporal splits
 
-Jamais de mélange aléatoire des lignes. Un découpage principal plus quatre
-découpages glissants, pour mesurer la stabilité :
+Never random row shuffling. One primary split plus four rolling splits, to
+measure stability:
 
-| Nom | Train | Validation | Test |
+| Name | Train | Validation | Test |
 |---|---|---|---|
-| PRIMARY | j1–160 | j161–200 | j201–240 |
-| S1 | j1–120 | j121–140 | j141–180 |
-| S2 | j1–140 | j141–160 | j161–200 |
-| S3 | j1–160 | j161–180 | j181–220 |
-| S4 | j1–180 | j181–200 | j201–240 |
+| PRIMARY | d1–160 | d161–200 | d201–240 |
+| S1 | d1–120 | d121–140 | d141–180 |
+| S2 | d1–140 | d141–160 | d161–200 |
+| S3 | d1–160 | d161–180 | d181–220 |
+| S4 | d1–180 | d181–200 | d201–240 |
 
-Si un événement chevauche une frontière, **toutes ses lignes sont écartées** de
-ce découpage : le même événement ne peut jamais apparaître des deux côtés.
+If an event overlaps a boundary, *all its rows are discarded* from that
+split: the same event can never appear on both sides.
 
-## 4. Les 24 features
+## 4. The 24 features
 
-Toutes dérivées des seules mesures observables, toutes causales (pas courant et
-pas passés uniquement).
+All derived from the observable measurements only, and all causal (current and
+past steps only).
 
-**12 features d'origine** — `src/features/base_features.py`
+*12 original features* — src/features/base_features.py
 
-| Feature | Mesure |
+| Feature | Measure |
 |---|---|
-| `res_zone` | incohérence maisons ↔ compteur de zone, **perte technique déduite** |
-| `res_trans` | incohérence zones ↔ compteur du poste, perte déduite |
-| `res_energy` | `(E(t) − E(t−1)) − P × 0,25`, jamais l'index brut |
-| `ratio_voisins` | la maison face aux autres de sa zone, après normalisation |
-| `nb_voisins_anormaux` | nombre de voisins déviant au même instant |
-| `variation` | `ΔP` normalisée par la baseline de la maison |
-| `frozen_count` | paliers consécutifs quasi identiques, **avec tolérance** |
-| `rolling_std_6h` | variabilité des 6 heures passées |
-| `drift_slope` | pente de dérive sur 12 h, mesurée sur l'écart aux voisins |
-| `dev_tension` | `(V − 230) / 230` |
-| `trans_load_pct` | charge du transformateur en % du nominal |
-| `res_VI` | cohérence `P ≈ V × I × PF / 1000` |
+| res_zone | house ↔ zone meter inconsistency, *technical loss subtracted* |
+| res_trans | zones ↔ transformer meter inconsistency, loss subtracted |
+| res_energy | (E(t) − E(t−1)) − P × 0.25, never the raw cumulative index |
+| ratio_voisins | the house versus the other houses of its zone, after normalization |
+| nb_voisins_anormaux | number of neighbors deviating at the same instant |
+| variation | ΔP normalized by the house's baseline |
+| frozen_count | consecutive nearly identical steps, *with tolerance* |
+| rolling_std_6h | variability over the past 6 hours |
+| drift_slope | drift slope over 12 h, measured on the gap to the neighbors |
+| dev_tension | (V − 230) / 230 |
+| trans_load_pct | transformer load as a % of nominal |
+| res_VI | consistency P ≈ V × I × PF / 1000 |
 
-**4 écarts à l'historique de la maison** — `src/features/baseline_features.py`
+*4 deviations from the house's own history* — src/features/baseline_features.py
 
-`deviation_from_house_baseline`, `relative_deviation_from_baseline`,
-`zscore_vs_house_baseline`, `ratio_to_hour_median`.
+deviation_from_house_baseline, relative_deviation_from_baseline,
+zscore_vs_house_baseline, ratio_to_hour_median.
 
-Elles comparent la maison à **sa propre histoire** et non à ses voisins : c'est
-ce qui distingue un décalage de compteur d'une variation de zone.
+They compare the house to *its own history* rather than to its neighbors:
+this is what distinguishes a meter offset from a zone-wide variation.
 
-**8 features de persistance** — `src/features/persistence_features.py`
+*8 persistence features* — src/features/persistence_features.py
 
-`mean_deviation_3h/6h/12h/24h`, `median_res_zone_6h/24h`,
-`persistent_neighbor_deviation`, `consecutive_abnormal_count`.
+mean_deviation_3h/6h/12h/24h, median_res_zone_6h/24h,
+persistent_neighbor_deviation, consecutive_abnormal_count.
 
-Un démarrage d'appareil dure 1 à 4 pas, un biais de compteur 24 à 72 : moyenner
-sur plusieurs heures efface le premier et conserve le second.
+An appliance start lasts 1 to 4 steps, a meter bias 24 to 72: averaging over
+several hours erases the former and keeps the latter.
 
-### Statistiques apprises
+### Learned statistics
 
-| Statistique | Origine |
+| Statistic | Origin |
 |---|---|
-| baselines par maison / créneau / heure | médianes du **train** |
-| échelles robustes (médiane, MAD) | **train** |
-| modèle de perte technique (affine en charge) | régression sur le **train**, déciles 10–90 |
-| tolérance `frozen_count` | quantile 2 % des variations relatives du **train** |
-| seuil « voisin anormal » | quantile 99 % du **train** |
-| seuils des règles | quantile 99,5 % sur les instants **propres** du train |
+| per-house / per-slot / per-hour baselines | *train* medians |
+| robust scales (median, MAD) | *train* |
+| technical loss model (affine in load) | regression on the *train*, deciles 10–90 |
+| frozen_count tolerance | 2% quantile of the *train* relative variations |
+| "abnormal neighbor" threshold | 99% quantile of the *train* |
+| rule thresholds | 99.5% quantile on the *clean* train instants |
 
-Aucune constante arbitraire. Le constructeur de features est **ré-ajusté pour
-chaque découpage**.
+No arbitrary constants. The feature builder is *re-fitted for each split*.
 
-### Valeurs manquantes
+### Missing values
 
-Les NaN sont **conservés** : ils portent de l'information (classe
-`missing_data`) et LightGBM les traite nativement. Isolation Forest, qui ne les
-accepte pas, reçoit une copie imputée par les **médianes du train**.
+NaNs are *kept*: they carry information (missing_data class) and LightGBM
+handles them natively. Isolation Forest, which does not accept them, receives a
+copy imputed with the *train medians*.
 
-## 5. Structure du projet
+## 5. Project structure
 
-```
 EnergyMind-Phase1/
-├── data/                        dataset figé de 240 jours
-├── models/                      modèle entraîné (joblib)
+├── data/                        frozen 240-day dataset
+├── models/                      trained model (joblib)
 ├── src/
-│   ├── config.py                chargement de config.yaml
+│   ├── config.py                loads config.yaml
 │   ├── data/
-│   │   ├── loader.py            chargement + inspection des CSV
-│   │   ├── merge.py             assemblage maison + zone + transfo
-│   │   └── splits.py            découpages, protection anti-fuite
+│   │   ├── loader.py            CSV loading + inspection
+│   │   ├── merge.py             house + zone + transformer assembly
+│   │   └── splits.py            splits, leak protection
 │   ├── features/
-│   │   ├── windows.py           primitives de fenêtre causale
-│   │   ├── base_features.py     les 12 d'origine
-│   │   ├── baseline_features.py les 4 d'historique
-│   │   ├── persistence_features.py  les 8 de persistance
+│   │   ├── windows.py           causal window primitives
+│   │   ├── base_features.py     the 12 original features
+│   │   ├── baseline_features.py the 4 history-based features
+│   │   ├── persistence_features.py  the 8 persistence features
 │   │   └── feature_pipeline.py  FeatureBuilder, FINAL_FEATURES
 │   ├── models/
-│   │   ├── lightgbm_model.py    classification multiclasse
-│   │   ├── isolation_forest.py  score de nouveauté
+│   │   ├── lightgbm_model.py    multiclass classification
+│   │   ├── isolation_forest.py  novelty score
 │   │   └── calibration.py       Vector Scaling, ECE, abstention
-│   ├── rules/physical_rules.py  cohérence entre niveaux
-│   ├── inference/pipeline.py    préparation, fusion, politique de confiance
+│   ├── rules/physical_rules.py  consistency between levels
+│   ├── inference/pipeline.py    preparation, fusion, confidence policy
 │   └── evaluation/
-│       ├── metrics.py           métriques ligne et événement
+│       ├── metrics.py           row-level and event-level metrics
 │       └── plots.py             figures
 ├── outputs/{metrics,figures,predictions,datasets}/
 ├── tests/
-├── config.yaml                  tous les paramètres
-├── main.py                      entraînement + évaluation
-├── run_calibration.py           calibration de confiance
+├── config.yaml                  all parameters
+├── main.py                      training + evaluation
+├── run_calibration.py           confidence calibration
 └── requirements.txt
-```
 
 ## 6. Installation
 
-```bash
 pip install -r requirements.txt
-```
 
-> **Note d'environnement.** `scikit-learn` est épinglé en **1.5.2** : sur
-> certains postes Windows, la version 1.9.x est bloquée par la stratégie de
-> contrôle d'applications (`DLL load failed ... _expected_mutual_info_fast`),
-> ce qui rend `sklearn.ensemble` inutilisable.
+**Environment note.** `scikit-learn` is pinned to **1.5.2**: on some Windows
+machines, version 1.9.x is blocked by the application control policy
+(`DLL load failed ... _expected_mutual_info_fast`), which makes
+`sklearn.ensemble` unusable.
 
-## 7. Exécution
 
-```bash
+## 7. Running
+
 python main.py
-```
 
-Entraîne et évalue le modèle sur les 5 découpages (~45 min), écrit métriques,
-figures, prédictions et le modèle sauvegardé.
+Trains and evaluates the model on the 5 splits (~45 min), and writes metrics,
+figures, predictions and the saved model.
 
-```bash
 python main.py --quick --no-figures
-```
 
-Découpage principal seul, pour une mise au point rapide.
+Primary split only, for fast tuning.
 
-```bash
 python run_calibration.py
-```
 
-Calibration de confiance. Avec `--reuse`, réutilise les probabilités déjà
-sauvegardées au lieu de réentraîner.
+Confidence calibration. With --reuse, it reuses the probabilities already
+saved instead of retraining.
 
-```bash
 python -m pytest tests -q
-```
 
-27 tests : chargement, assemblage, 24 features, rôles des composants,
-calibration, politique de confiance.
+27 tests: loading, assembly, 24 features, component roles, calibration,
+confidence policy.
 
-## 8. Calibration de confiance
+## 8. Confidence calibration
 
-Quatre méthodes sont comparées — aucune, temperature, vector, isotone — toutes
-ajustées **sur la validation uniquement**, et sélectionnées par
-log-vraisemblance de validation.
+Four methods are compared (none, temperature, vector, isotonic), all fitted
+*on the validation set only* and selected by validation log-likelihood.
 
-**Vector Scaling** est retenue. Effet mesuré sur les lignes prédites anormales :
+*Vector Scaling* is retained. Measured effect on the rows predicted abnormal:
 
-| | Avant | Après |
+| | Before | After |
 |---|---|---|
-| ECE | 0,1040 | **0,0453** |
-| Précision réelle | 84,7 % | **90,6 %** |
+| ECE | 0.1040 | *0.0453* |
+| Actual precision | 84.7% | *90.6%* |
 
-Exemple parlant : le système annonçait `sensor_drift` avec 77 % de confiance en
-n'ayant raison que 37 % du temps. Il annonce désormais 66 % pour 54 % de
-réussite.
+A telling example: the system used to announce sensor_drift with 77%
+confidence while being right only 37% of the time. It now announces 66% for a
+54% success rate.
 
-**Politique d'abstention** : au-dessous de `inference.confidence_threshold`
-(0,80), le système répond **INCERTAIN** au lieu d'un nom de classe. On conserve
-alors 89 % des alertes avec **96 % de précision**.
+*Abstention policy*: below inference.confidence_threshold (0.80), the
+system answers *UNCERTAIN* instead of a class name. This keeps 89% of the
+alerts with *96% precision*.
 
-## 9. Résultats
+## 9. Results
 
-Moyenne ± écart-type sur les 5 découpages temporels.
+Mean ± standard deviation over the 5 temporal splits.
 
-| Métrique | Valeur |
+| Metric | Value |
 |---|---|
-| Macro F1 | 0,830 ± 0,009 |
-| Macro Recall | 0,830 |
-| Rappel d'anomalies | 0,804 |
-| **Taux de faux positifs** | **0,60 %** |
-| Rappel au niveau événement | 98,5 % |
-| Accuracy | 97,2 % |
+| Macro F1 | 0.830 ± 0.009 |
+| Macro Recall | 0.830 |
+| Anomaly recall | 0.804 |
+| *False positive rate* | *0.60%* |
+| Event-level recall | 98.5% |
+| Accuracy | 97.2% |
 
-L'accuracy est volontairement secondaire : 92 % des lignes sont normales, donc
-un modèle muet afficherait déjà 92 %.
+Accuracy is deliberately secondary: 92% of the rows are normal, so a mute
+model would already show 92%.
 
-**F1 par classe** : `house_outage` et `zone_outage` 1,00 · `missing_data` 0,98 ·
-`voltage_sag` 0,96 · `sensor_frozen` 0,96 · `overload` 0,97 ·
-`voltage_spike` 0,91 · `falsified_reading` 0,82 · `sensor_bias` 0,33 ·
-`sensor_drift` 0,21.
+*F1 per class*: house_outage and zone_outage 1.00 · missing_data 0.98 ·
+voltage_sag 0.96 · sensor_frozen 0.96 · overload 0.97 ·
+voltage_spike 0.91 · falsified_reading 0.82 · sensor_bias 0.33 ·
+sensor_drift 0.21.
 
-## 10. Limites connues
+## 10. Known limitations
 
-- **`sensor_bias` et `sensor_drift` restent faibles.** Le système détecte le
-  problème dans 67 à 77 % des cas mais confond souvent les deux classes entre
-  elles : elles se recouvrent réellement. Quatre familles de features ont été
-  testées ; seules deux ont tenu sur les 5 découpages, et aucune n'a amélioré
-  la dérive.
-- **`sensor_bias` reste 27 points trop confiant** après calibration. Celle-ci
-  rend l'optimisme visible, elle ne le supprime pas.
-- **Retard de détection** : une dérive est détectée au bout de 26 pas en
-  médiane (6 h 30), et jusqu'à 57 pas au 90ᵉ centile.
-- **Un seul jeu simulé.** Les conclusions valent pour ce réseau et ce
-  simulateur ; un réseau réel demandera une revalidation.
-- L'écart entre F1 d'entraînement (0,99) et de test (0,83) est important : le
-  modèle apprend presque parfaitement le train. Il ne se creuse pas avec les
-  features ajoutées, mais il reste à surveiller.
+- **sensor_bias and sensor_drift remain weak.** The system detects the
+  problem in 67 to 77% of cases but often confuses the two classes with each
+  other: they genuinely overlap. Four families of features were tested; only
+  two held up across the 5 splits, and none improved drift.
+- **sensor_bias is still 27 points overconfident** after calibration.
+  Calibration makes the optimism visible, it does not remove it.
+- *Detection delay*: a drift is detected after 26 steps at the median
+  (6 h 30), and up to 57 steps at the 90th percentile.
+- *A single simulated dataset.* The conclusions hold for this network and
+  this simulator; a real network will require revalidation.
+- The gap between training F1 (0.99) and test F1 (0.83) is large: the model
+  learns the training set almost perfectly. It does not widen with the added
+  features, but it remains to be monitored.
 
-## 11. Reproductibilité
+## 11. Reproducibility
 
-- Graine fixée (`model.random_state: 42`), propagée à LightGBM et à
+- Fixed seed (model.random_state: 42), propagated to LightGBM and to
   Isolation Forest.
-- Aucun chemin absolu dans les modules : la racine du projet est déduite de
-  l'emplacement de `src/config.py`.
-- Tous les paramètres sont dans `config.yaml`.
-- Le modèle entraîné est sauvegardé dans `models/`, les probabilités de
-  calibration dans `outputs/datasets/` pour rejouer l'analyse sans
-  réentraînement.
+- No absolute paths in the modules: the project root is deduced from the
+  location of src/config.py.
+- All parameters are in config.yaml.
+- The trained model is saved in models/, and the calibration probabilities
+  in outputs/datasets/, so the analysis can be replayed without retraining.
